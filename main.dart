@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart'; 
+import 'package:path/path.dart';
+import 'screens/cards_screen.dart';  
 
 void main() {
   runApp(MyApp());
@@ -27,6 +28,7 @@ class CardOrganizerApp extends StatefulWidget {
 class _CardOrganizerAppState extends State<CardOrganizerApp> {
   late Database db;
   bool isDbInitialized = false;
+  List<Map<String, dynamic>> folders = [];
 
   @override
   void initState() {
@@ -35,9 +37,7 @@ class _CardOrganizerAppState extends State<CardOrganizerApp> {
   }
 
   Future<void> initDatabase() async {
-    // Correctly defining the path before passing it to openDatabase
     String path = join(await getDatabasesPath(), 'cards_database.db');
-
     db = await openDatabase(
       path,
       onCreate: (db, version) {
@@ -46,90 +46,71 @@ class _CardOrganizerAppState extends State<CardOrganizerApp> {
       },
       version: 1,
     );
-    setState(() {
-      isDbInitialized = true;
-    });
+    fetchFolders();
   }
 
-  void showSnackBar(BuildContext context, String message, {Color color = Colors.red}) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(message), backgroundColor: color, duration: const Duration(seconds: 2)),
-  );
-}
+  Future<void> fetchFolders() async {
+    final List<Map<String, dynamic>> folderData = await db.query('Folders');
+    setState(() {
+      folders = folderData;
+    });
+  }
 
   Future<int> getCardCount(int folderId) async {
     final count = await db.rawQuery("SELECT COUNT(*) as count FROM Cards WHERE folder_id = ?", [folderId]);
     return Sqflite.firstIntValue(count) ?? 0;
   }
 
-  Future<void> addCard(String cardName, int folderId) async {
-    int cardCount = await getCardCount(folderId);
-    if (cardCount >= 6) {
-      showSnackBar(context as BuildContext, "Folder limit reached! ❌ Max 6 cards allowed.");
-      return;
-    }
-    await db.insert('Cards', {'name': cardName, 'folder_id': folderId});
-    showSnackBar(context as BuildContext, "Card added successfully! ✅", color: Colors.green);
-    setState(() {});
-  }
-
-  Future<void> confirmDeleteFolder(int folderId) async {
-    int cardCount = await getCardCount(folderId);
-    if (cardCount >= 3) {
-      showSnackBar(context as BuildContext, "Cannot delete folder! ❌ Must have fewer than 3 cards.");
-      return;
-    }
-
-    showDialog(
-      context: context as BuildContext,  
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text("Delete Folder?"),
-          content: const Text("Are you sure you want to delete this folder? This action cannot be undone."),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text("Cancel"),
-            ),
-            TextButton(
-              onPressed: () async {
-                await db.delete('Folders', where: 'id = ?', whereArgs: [folderId]);
-                Navigator.of(dialogContext).pop();
-                showSnackBar(context as BuildContext,"Folder deleted successfully! ✅", color: Colors.green);
-                setState(() {});
-              },
-              child: const Text("Delete", style: TextStyle(color: Colors.red)),
-            ),
-          ],
-        );
-      },
-    );
+  Future<String?> getFolderPreviewImage(int folderId) async {
+    final cards = await db.query('Cards', where: 'folder_id = ?', whereArgs: [folderId], limit: 1);
+    return cards.isNotEmpty ? cards[0]['name'] as String: null; // Use card name as preview
   }
 
   @override
-  Widget build(BuildContext appContext) {
-    if (!isDbInitialized) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Card Organizer")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: () => addCard("Ace of Spades", 1),
-              child: const Text("Add Card"),
-            ),
-            ElevatedButton(
-              onPressed: () => confirmDeleteFolder(1),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              child: Text("Delete Folder"),
-            ),
-          ],
-        ),
-      ),
+      body: isDbInitialized
+          ? ListView.builder(
+              itemCount: folders.length,
+              itemBuilder: (context, index) {
+                final folder = folders[index];
+                return FutureBuilder<String?>(
+                  future: getFolderPreviewImage(folder['id']),
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const CircularProgressIndicator();
+                    }
+                    String? previewImage = snapshot.data;
+                    return ListTile(
+                      leading: previewImage != null
+                          ? Image.asset(previewImage) // Display preview image (could be a card image)
+                          : const Icon(Icons.image),
+                      title: Text(folder['name']),
+                      subtitle: FutureBuilder<int>(
+                        future: getCardCount(folder['id']),
+                        builder: (context, cardCountSnapshot) {
+                          if (cardCountSnapshot.connectionState == ConnectionState.waiting) {
+                            return const CircularProgressIndicator();
+                          }
+                          int cardCount = cardCountSnapshot.data ?? 0;
+                          return Text('$cardCount cards');
+                        },
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => CardsScreen(folderId: folder['id']),
+                          ),
+                        );
+                      },
+                    );
+                  },
+                );
+              },
+            )
+          : const Center(child: CircularProgressIndicator()),
     );
   }
 }
